@@ -3,11 +3,9 @@ const jwt = require("jwt-simple");
 const path = require("path");
 const moment = require('moment');
 const bodyParser = require('body-parser');
-const session = require('express-session');
 const passport = require('passport');
-const { jwtValidator, Secret_Key } = require('./jwt-validator');
 // setup passport configuration
-require('./pass');
+const { Secret_Key } = require('./pass');
 
 const db = require('./db');
 
@@ -19,35 +17,39 @@ const port = 7000;
 
 const jsonParser = bodyParser.json();
 
-app.use(session({
-  secret: 'my awesome app',
-  resave: false,
-  saveUninitialized: false,
-}));
 app.use(passport.initialize());
-app.use(passport.session());
 app.use(express.static(path.join(__dirname, 'resources')));
 
-app.post('/api/user/login', [jsonParser, passport.authenticate('local')], async (req, res) => {
+const authenticator = passport.authenticate('jwt', { session: false });
+
+app.post('/api/user/login', jsonParser, async (req, res) => {
   try {
-    const { user } = req;
-    // verified, setup jwt
-    const expires = moment().day(7).valueOf();
-    const token = jwt.encode({
-      iss: user._id,
-      exp: expires,
-    }, app.get(Secret_Key));
-    res.json({
-      token,
-      expires,
-      user: JSON.stringify(user)
-    });
+    const { username, password } = req.body;
+    const user = await db.findUser({ name: username });
+    if( ! user ){
+      res.status(401).json({message:"no such user found"});
+    }
+    if (user.password === password) {
+      // verified, setup jwt
+      const expires = moment().day(7).valueOf();
+      // put user id and expire date into token
+      const payload = { _id: user._id, expires };
+      const token = jwt.encode(payload, Secret_Key);
+      // send back token
+      res.json({
+        token,
+        user: {
+          _id: user._id,
+          name: user.name
+        }
+      });
+    }
   } catch (error) {
     res.redirect('/login');
   }
 });
 
-app.get('/api/books', jwtValidator(), async (req, res) => {
+app.get('/api/books', authenticator, async (req, res) => {
   try {
     const pagedBooks = await db.getBooks(1, 10);
     res.json(pagedBooks);
@@ -59,7 +61,7 @@ app.get('/api/books', jwtValidator(), async (req, res) => {
   }
 })
 
-app.post('/api/books/:book_id/reserve', jsonParser, jwtValidator(), async (req, res) => {
+app.post('/api/books/:book_id/reserve', jsonParser, authenticator, async (req, res) => {
   try {
     const { book_id } = req.params;
     const { _id } = req.user;
@@ -77,7 +79,7 @@ app.post('/api/books/:book_id/reserve', jsonParser, jwtValidator(), async (req, 
   }
 })
 
-app.post('/api/user/:user_id/reservations', jwtValidator(), async (req, res) => {
+app.post('/api/user/:user_id/reservations', authenticator, async (req, res) => {
   try {
     const { user_id } = req.params;
     const { _id } = req.user;
